@@ -27,6 +27,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Fetch data
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python scripts/fetch_data.py
       - name: Commit data
         run: |

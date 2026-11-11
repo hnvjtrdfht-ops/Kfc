@@ -224,7 +224,9 @@
       <div class="sec-head"><div><h2>판정 기준: 다섯 가지 조합</h2><span class="muted">같은 TGA 움직임도 옆에 무엇이 붙느냐에 따라 결과가 달라집니다</span></div></div>
       <div class="grid" id="refList"></div>
     </section>`;
-    $("#app").innerHTML = html;
+    const miss = data.missing_series || [];
+    const missName = { reserves: "지급준비금", bills: "연준 T-bill", walcl: "연준 총자산", rrp: "역레포", sofr: "SOFR", iorb: "IORB" };
+    $("#app").innerHTML = (miss.length ? `<div class="card" style="border-left:4px solid var(--warn);margin-bottom:16px">${chip("데이터 일부 없음", "--warn")} <span style="margin-left:6px">${esc(miss.map((k) => missName[k] || k).join(", "))} 수집 실패 — 해당 칸은 비어 있습니다.</span></div>` : "") + html;
 
     renderDecomp(cur);
     renderScenarioStats(W);
