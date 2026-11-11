@@ -104,10 +104,16 @@
     if (data.btc_source) $("#btcSrc").textContent = data.btc_source;
 
     const rrpLab = { ample: ["넉넉", "--good"], thin: ["얇아짐", "--warn"], floor: ["바닥", "--crit"] }[cur.rrp_state] || ["—", "--neutral"];
-    const fedLab = cur.fed_buying ? ["매입 중", "--good"] : (cur.d_bills_4w != null && cur.d_bills_4w < -T.fed_buy_4w ? ["축소 중", "--crit"] : ["매입 없음", "--neutral"]);
+    const b4 = cur.d_bills_4w;
+    const fedLab = cur.fed_buying ? ["매입 중", "--good"]
+      : b4 == null ? ["—", "--neutral"]
+      : b4 > 0 ? ["소폭 매입 (기준 미달)", "--warn"]
+      : b4 < -T.fed_buy_4w ? ["축소 중", "--crit"] : ["매입 없음", "--neutral"];
     const tgaLab = cur.d_tga >= T.tga_move ? ["증가", "--crit"] : cur.d_tga <= -T.tga_move ? ["감소", "--good"] : ["보합", "--neutral"];
     const spreadTone = cur.spread_bp == null ? "--neutral" : cur.spread_bp > 0 ? "--crit" : cur.spread_bp > -5 ? "--warn" : "--good";
     const lastRrpDaily = (data.rrp_daily || []).slice(-1)[0];
+    const lastTgaDaily = (data.tga_daily || []).slice(-1)[0];
+    const tgaSince = lastTgaDaily && lastTgaDaily.date > cur.date ? lastTgaDaily.tga - cur.tga : null;
 
     // 4주 BTC 수익률
     const w4 = W[W.length - 5];
@@ -161,6 +167,7 @@
           <div class="q">TGA가 올랐나, 내렸나?</div>
           <div class="v num">${fmtB(cur.tga)}</div>
           <div class="d num">1주 <span class="${cls(-cur.d_tga)}">${fmtB(cur.d_tga, true)}</span> · 4주 <span class="${cls(-cur.d_tga_4w)}">${fmtB(cur.d_tga_4w, true)}</span></div>
+          ${lastTgaDaily ? `<div class="d num">최신 일간 ${md(lastTgaDaily.date)} ${fmtB(lastTgaDaily.tga)}${tgaSince != null ? ` · 기준일 이후 <span class="${cls(-tgaSince)}">${fmtB(tgaSince, true)}</span>` : ""}</div>` : ""}
           <div style="margin-top:8px">${chip(tgaLab[0], tgaLab[1])}</div>
           <div class="rule">주간 ±${fmtShort(T.tga_move)} 이상을 증가·감소로 봅니다. TGA 증가 = 시중 달러 흡수.</div>
         </div>
