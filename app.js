@@ -190,9 +190,9 @@
 
     <section>
       <div class="sec-head">
-        <div><h2>BTC vs 순유동성</h2><span class="muted">두 값을 구간 시작점 = 100으로 맞춰 한 축에서 비교</span></div>
+        <div><h2>BTC vs 순유동성</h2><span class="muted">두 값을 구간 시작점 = 100으로 맞춰 한 축에서 비교 · 2년 이상은 로그 눈금 · 점선 = BTC 반감기</span></div>
         <div class="toolbar" id="rangeBtns">
-          <button type="button" data-n="26">6개월</button><button type="button" data-n="52" aria-pressed="true">1년</button><button type="button" data-n="104">2년</button><button type="button" data-n="9999">전체</button>
+          <button type="button" data-n="26">6개월</button><button type="button" data-n="52" aria-pressed="true">1년</button><button type="button" data-n="104">2년</button><button type="button" data-n="208">4년</button><button type="button" data-n="9999">전체(2017~)</button>
         </div>
       </div>
       <div class="card">
@@ -210,7 +210,7 @@
     </section>
 
     <section>
-      <div class="sec-head"><div><h2>BTC는 각 조합에서 어떻게 움직였나</h2><span class="muted">2022년 이후 주간 판정별 BTC/USDT 수익률</span></div></div>
+      <div class="sec-head"><div><h2>BTC는 각 조합에서 어떻게 움직였나</h2><span class="muted">2017년 8월(BTC/USDT 상장) 이후 주간 판정별 수익률</span></div></div>
       <div class="grid g2">
         <div class="card tscroll"><table id="scTable"></table></div>
         <div class="card" id="corrBox"></div>
@@ -403,7 +403,7 @@
       <table style="margin-top:8px"><tbody>
         <tr><td class="l">최근 1년</td><td class="num"><b>${f(c52)}</b></td><td class="l muted">${word(c52)}</td></tr>
         <tr><td class="l">최근 2년</td><td class="num">${f(c104)}</td><td class="l muted">${word(c104)}</td></tr>
-        <tr><td class="l">2022년 이후 전체</td><td class="num">${f(cAll)}</td><td class="l muted">${word(cAll)}</td></tr>
+        <tr><td class="l">2017년 이후 전체</td><td class="num">${f(cAll)}</td><td class="l muted">${word(cAll)}</td></tr>
         <tr><td class="l">4주 TGA 변화 ↔ BTC (1년)</td><td class="num">${f(ct)}</td><td class="l muted">${word(ct)}${ct != null && ct < 0 ? " · TGA↑ 때 BTC↓ 경향" : ""}</td></tr>
       </tbody></table>
       <p class="muted" style="margin:10px 0 0">겹치는 4주 구간으로 계산해 표본이 서로 독립적이지 않습니다. 방향 참고용입니다.</p>`;
@@ -485,20 +485,45 @@
     const S = W.slice(-Math.min(n, W.length));
     const labels = S.map((w) => w.date.slice(2).replace(/-/g, "."));
 
-    const b0 = S.find((w) => w.btc)?.btc, l0 = S.find((w) => w.net_liq != null)?.net_liq;
-    const btcIdx = S.map((w) => (w.btc && b0 ? +((w.btc / b0) * 100).toFixed(1) : null));
-    const nlIdx = S.map((w) => (w.net_liq != null && l0 ? +((w.net_liq / l0) * 100).toFixed(2) : null));
+    // 두 값이 모두 있는 첫 주를 기준(=100)으로
+    const k0 = S.findIndex((w) => w.btc && w.net_liq != null);
+    const b0 = k0 >= 0 ? S[k0].btc : null, l0 = k0 >= 0 ? S[k0].net_liq : null;
+    const btcIdx = S.map((w, i) => (i >= k0 && w.btc && b0 ? +((w.btc / b0) * 100).toFixed(1) : null));
+    const nlIdx = S.map((w, i) => (i >= k0 && w.net_liq != null && l0 ? +((w.net_liq / l0) * 100).toFixed(2) : null));
+    const useLog = n >= 104;
     const o1 = baseOpts((v, c) => {
       const w = S[c.dataIndex];
       return c.datasetIndex === 0 ? `${v} (${fmtUsd(w.btc)})` : `${v} (${fmtB(w.net_liq)})`;
     });
     o1.plugins.tooltip.callbacks.afterBody = (items) => { const w = S[items[0].dataIndex]; const sc = SCEN[w.scenario] || SCEN.N; return `판정 ${sc.k} · ${sc.title}`; };
+    if (useLog) {
+      o1.scales.y.type = "logarithmic";
+      o1.scales.y.ticks.callback = (v) => ([10, 20, 50, 100, 200, 500, 1000, 2000, 5000].includes(v) ? v : "");
+    }
+    // 반감기 표시
+    const HALVINGS = [["2020-05-11", "2020 반감기"], ["2024-04-20", "2024 반감기"], ["2028-04-15", "2028 반감기(예상)"]];
+    const marks = HALVINGS.map(([d, lab]) => [S.findIndex((w) => w.date >= d), lab]).filter(([i]) => i > 0);
+    const halvingPlugin = {
+      id: "halving",
+      afterDatasetsDraw(chart) {
+        const { ctx, chartArea: a, scales: { x } } = chart;
+        ctx.save();
+        ctx.strokeStyle = css("--text-3"); ctx.fillStyle = css("--text-2");
+        ctx.setLineDash([4, 4]); ctx.lineWidth = 1; ctx.font = "11px 'Noto Sans KR', sans-serif";
+        for (const [i, lab] of marks) {
+          const px = x.getPixelForValue(i);
+          ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+          ctx.fillText(lab, Math.min(px + 4, a.right - 70), a.top + 12);
+        }
+        ctx.restore();
+      },
+    };
     // 순유동성 변동폭이 BTC보다 훨씬 작아 별도 패널 대신 같은 축에 지수로 표시
     charts.btc?.destroy();
     charts.btc = new Chart($("#cBtc"), { type: "line", data: { labels, datasets: [
       { label: "BTC/USDT 지수", data: btcIdx, borderColor: css("--accent"), backgroundColor: css("--accent") },
       { label: "순유동성 지수", data: nlIdx, borderColor: css("--s1"), backgroundColor: css("--s1") },
-    ] }, options: o1 });
+    ] }, options: o1, plugins: [halvingPlugin] });
 
     const o2 = baseOpts((v) => fmtB(v));
     o2.scales.y.ticks.callback = (v) => (v / 1000).toFixed(1) + "조";
@@ -508,7 +533,7 @@
       { label: "역레포", data: S.map((w) => w.rrp), borderColor: css("--s1"), backgroundColor: css("--s1") },
       { label: "지급준비금", data: S.map((w) => w.reserves), borderColor: css("--s3"), backgroundColor: css("--s3") },
       { label: "연준 T-bill", data: S.map((w) => w.bills), borderColor: css("--s4"), backgroundColor: css("--s4") },
-    ] }, options: o2 });
+    ] }, options: o2, plugins: [halvingPlugin] });
   }
 
   // ---------- Boot ----------
