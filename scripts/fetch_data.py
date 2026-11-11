@@ -200,6 +200,58 @@ def dts_tga():
     return out
 
 
+# 연준 H.4.1 전체 릴리스 (FRED 원본과 같은 수치). 단위: 백만 달러
+H41_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H41&filetype=zip"
+H41_SERIES = {
+    "tga": "RESPPLLDT_N.WW",       # U.S. Treasury, General Account: Wednesday level
+    "reserves": "RESPPLLDE_N.WW",  # Deposits held by depository institutions (지급준비금): Wednesday level
+    "bills": "RESPPALGUOB_N.WW",   # Treasury securities held outright: Bills: Wednesday level
+    "walcl": "RESPPA_N.WW",        # Total assets: Wednesday level
+    "rrp": "RESPPLLRD_N.WW",       # Reverse repurchase agreements: Others (ON RRP): Wednesday level
+}
+_H41_CACHE = None
+
+
+def h41_all():
+    global _H41_CACHE
+    if _H41_CACHE is not None:
+        return _H41_CACHE
+    import xml.etree.ElementTree as ET
+    import zipfile
+    try:
+        req = urllib.request.Request(H41_URL, headers=BROWSER_UA)
+        with urllib.request.urlopen(req, timeout=120) as r:
+            z = zipfile.ZipFile(io.BytesIO(r.read()))
+    except Exception as e:  # noqa: BLE001
+        print(f"H.4.1 다운로드 실패: {e}", file=sys.stderr)
+        _H41_CACHE = {k: {} for k in H41_SERIES}
+        return _H41_CACHE
+    want = {v: k for k, v in H41_SERIES.items()}
+    out = {k: {} for k in H41_SERIES}
+    start = START.isoformat()
+    with z.open("H41_data.xml") as f:
+        for _, el in ET.iterparse(f, events=("end",)):
+            if el.tag.split("}")[-1] != "Series":
+                continue
+            key = want.get(el.attrib.get("SERIES_NAME"))
+            if key:
+                mult = float(el.attrib.get("UNIT_MULT", "1000000"))
+                for o in el:
+                    if o.tag.split("}")[-1] != "Obs":
+                        continue
+                    d = o.attrib.get("TIME_PERIOD", "")
+                    try:
+                        v = float(o.attrib.get("OBS_VALUE"))
+                    except (TypeError, ValueError):
+                        continue
+                    if d >= start:
+                        out[key][d] = v * mult / 1e9  # 십억 달러
+            el.clear()
+    _H41_CACHE = out
+    print("H.4.1: " + ", ".join(f"{k} {len(v)}" for k, v in out.items()), file=sys.stderr)
+    return out
+
+
 def with_fallback(name, primary, fallback):
     if primary:
         return primary
@@ -414,8 +466,11 @@ def main():
         print(f"FRED {sid}: {len(s)}개" + (f", 최신 {max(s)}" if s else ""), file=sys.stderr)
 
     # FRED가 막혔을 때 공공 API로 대체
-    raw["tga"] = with_fallback("TGA", raw["tga"], dts_tga)
+    for k in ("tga", "reserves", "bills", "walcl"):
+        raw[k] = with_fallback(f"H.4.1 {k}", raw[k], lambda k=k: h41_all()[k])
+    raw["tga"] = with_fallback("TGA(DTS)", raw["tga"], dts_tga)
     raw["rrp"] = with_fallback("역레포", raw["rrp"], nyfed_rrp)
+    raw["rrp"] = with_fallback("역레포(H.4.1)", raw["rrp"], lambda: h41_all()["rrp"])
     raw["sofr"] = with_fallback("SOFR", raw["sofr"], lambda: nyfed_rates("secured/sofr")[0])
     # IORB = 연방기금 목표범위 상단 − 10bp (2021년 7월 이후 동일한 설정)
     raw["iorb"] = with_fallback(
