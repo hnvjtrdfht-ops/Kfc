@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TGA 주간 트래커</title>
+<meta name="description" content="역레포 → 연준 단기채 매입 → TGA 순서로 읽는 주간 유동성 트래킹, BTC/USDT 연결">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@700&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme: light;
+  --bg:#f6f5f2; --surface:#fcfcfb; --surface-2:#f0efec; --border:#e2e0da;
+  --text:#0b0b0b; --text-2:#52514e; --text-3:#7a7974;
+  --good:#0ca30c; --warn:#c98500; --serious:#ec835a; --crit:#d03b3b; --neutral:#7a7974;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#6250d6;
+  --pos:#2a78d6; --neg:#e34948; --grid:rgba(0,0,0,.07);
+  --accent:#c98500;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --bg:#121211; --surface:#1a1a19; --surface-2:#232321; --border:#2e2e2b;
+    --text:#f0efec; --text-2:#c3c2b7; --text-3:#8d8c85;
+    --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#e66767; --neutral:#8d8c85;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#9085e9;
+    --pos:#3987e5; --neg:#e66767; --grid:rgba(255,255,255,.07);
+    --accent:#fab219;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --bg:#121211; --surface:#1a1a19; --surface-2:#232321; --border:#2e2e2b;
+  --text:#f0efec; --text-2:#c3c2b7; --text-3:#8d8c85;
+  --good:#0ca30c; --warn:#fab219; --serious:#ec835a; --crit:#e66767; --neutral:#8d8c85;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#9085e9;
+  --pos:#3987e5; --neg:#e66767; --grid:rgba(255,255,255,.07);
+  --accent:#fab219;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--text);font-family:"Noto Sans KR",system-ui,-apple-system,sans-serif;font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 16px 64px}
+h1{font-family:"Noto Serif KR",serif;font-size:28px;margin:0 0 6px;letter-spacing:-.01em}
+h2{font-size:17px;margin:0 0 4px}
+.sub{color:var(--text-2);margin:0}
+.muted{color:var(--text-3);font-size:13px}
+.num{font-variant-numeric:tabular-nums}
+header{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:flex-end;margin-bottom:22px}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button,.btn{font:inherit;font-size:13px;color:var(--text-2);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer}
+button[aria-pressed="true"]{color:var(--text);border-color:var(--text-3);background:var(--surface-2)}
+section{margin-top:26px}
+.sec-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px}
+.grid{display:grid;gap:12px}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (max-width:820px){.g3,.g4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.g3,.g4,.g2{grid-template-columns:1fr}h1{font-size:23px}}
+
+/* BTC live strip */
+.btc{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.btc .px{font-size:22px;font-weight:700}
+.chg.up{color:var(--good)} .chg.down{color:var(--crit)}
+
+/* hero verdict */
+.verdict{display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:start;border-left:4px solid var(--tone,var(--neutral));padding:20px 22px}
+.verdict .big{font-family:"Noto Serif KR",serif;font-size:56px;line-height:1;color:var(--tone,var(--neutral));min-width:46px;text-align:center}
+.verdict .title{font-size:20px;font-weight:700;margin:2px 0 6px}
+.verdict .effect{margin:0 0 10px;color:var(--text)}
+.verdict .btcread{display:inline-flex;gap:8px;align-items:center;background:var(--surface-2);border-radius:8px;padding:6px 10px;font-size:14px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:3px 8px;border-radius:999px;background:var(--surface-2);color:var(--text-2);white-space:nowrap}
+.chip .dot{width:8px;height:8px;border-radius:50%;background:var(--c,var(--neutral))}
+
+/* steps */
+.step{position:relative}
+.step .n{font-size:12px;color:var(--text-3);letter-spacing:.04em}
+.step .q{font-weight:700;margin:2px 0 10px}
+.step .v{font-size:24px;font-weight:700}
+.step .d{color:var(--text-2);font-size:13px}
+.step .rule{margin-top:10px;font-size:13px;color:var(--text-2);border-top:1px dashed var(--border);padding-top:8px}
+.arrow{color:var(--text-3)}
+
+.kpi .lab{font-size:13px;color:var(--text-2)}
+.kpi .v{font-size:20px;font-weight:700;margin-top:2px}
+.kpi .d{font-size:12px;color:var(--text-3)}
+
+/* decomposition */
+.decomp{display:grid;grid-template-columns:120px 1fr 110px;gap:8px 12px;align-items:center;font-size:14px}
+.decomp .bar{position:relative;height:16px}
+.decomp .bar::before{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;border-left:1px solid var(--text-3);opacity:.5}
+.decomp .fill{position:absolute;top:2px;height:12px;border-radius:4px}
+.decomp .val{text-align:right}
+@media (max-width:560px){.decomp{grid-template-columns:92px 1fr 88px;font-size:13px}}
+
+.chart-box{position:relative;height:300px}
+@media (max-width:560px){.chart-box{height:240px}}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--text-2);margin:6px 0 10px}
+.legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px;background:var(--c)}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 8px;text-align:right;border-bottom:1px solid var(--border);white-space:nowrap}
+th{font-weight:500;color:var(--text-3)}
+th:first-child,td:first-child{text-align:left}
+td.l,th.l{text-align:left}
+.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.pos{color:var(--good)} .neg{color:var(--crit)}
+
+/* reference table */
+.ref{display:grid;grid-template-columns:44px 1.1fr 1.4fr 1.1fr;gap:12px;align-items:center;padding:14px 16px;border-left:4px solid var(--tone)}
+.ref .k{font-family:"Noto Serif KR",serif;font-size:26px;color:var(--tone);text-align:center}
+.ref .t{font-weight:700}
+.ref .t small{display:block;font-weight:400;color:var(--text-2);font-size:13px}
+.ref .e{font-size:14px}
+.ref .x{font-size:13px;color:var(--text-2)}
+.ref .x b{color:var(--tone);font-weight:500}
+.ref.now{outline:2px solid var(--tone);outline-offset:-1px}
+@media (max-width:720px){.ref{grid-template-columns:36px 1fr}.ref .e,.ref .x{grid-column:2}}
+
+.order{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;font-size:14px}
+.order span.o{background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:4px 12px}
+.empty{padding:40px 20px;text-align:center;color:var(--text-2)}
+footer{margin-top:36px;color:var(--text-3);font-size:12px;line-height:1.7}
+a{color:var(--s1)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>TGA는 혼자 읽지 않습니다</h1>
+      <p class="sub">역레포가 비었는지 → 연준이 사고 있는지 → TGA는 마지막에. 주간 트래킹 · BTC/USDT 연결</p>
+      <div class="order"><span class="o">① 역레포 완충재</span><span class="arrow">→</span><span class="o">② 연준 단기채 매입</span><span class="arrow">→</span><span class="o">③ TGA</span><span class="arrow">→</span><span class="o">지준 · 단기금리 · BTC</span></div>
+    </div>
+    <div class="toolbar">
+      <div class="card btc" style="padding:10px 14px">
+        <span class="muted">BTC/USDT</span>
+        <span class="px num" id="btcPx">—</span>
+        <span class="chg num" id="btcChg"></span>
+      </div>
+      <button id="themeBtn" type="button" title="테마 전환">테마</button>
+    </div>
+  </header>
+
+  <div id="app"><div class="card empty">데이터를 불러오는 중…</div></div>
+
+  <footer>
+    자료: 미국 연준 H.4.1 (FRED: WTREGEN·WRESBAL·WSHOBL·WALCL), 뉴욕 연준 ON RRP·SOFR (FRED: RRPONTSYD·SOFR·IORB), 미국 재무부 DTS·Upcoming Auctions (Fiscal Data), BTC/USDT 일봉 종가(<span id="btcSrc">Binance</span>).<br>
+    주간 기준일은 H.4.1 수요일 잔액입니다. 순유동성 = 연준 총자산 − TGA − 역레포. 판정은 단순 규칙 기반이며 투자 조언이 아닙니다.<br>
+    <span id="genAt"></span>
+  </footer>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
