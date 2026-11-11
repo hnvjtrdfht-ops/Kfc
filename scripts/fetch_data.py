@@ -21,7 +21,7 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 
-START = date(2022, 1, 1)
+START = date(2017, 1, 1)  # BTC/USDT(바이낸스)는 2017-08-17부터
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "tga.json")
 PRED_LOG = os.path.join(os.path.dirname(OUT), "predictions.json")
 MIN_SAMPLE = 8  # 같은 판정 표본이 이보다 적으면 전체 기준
@@ -42,6 +42,9 @@ RATE_SERIES = {"sofr", "iorb"}
 
 # 부채한도로 발행이 막혔던 구간 (TGA 감소 = 나중에 되돌려야 하는 돈)
 DEBT_CEILING = [
+    ("2017-03-16", "2017-09-08"),
+    ("2019-03-02", "2019-08-02"),
+    ("2021-08-01", "2021-12-16"),
     ("2023-01-19", "2023-06-03"),
     ("2025-01-21", "2025-07-04"),
 ]
@@ -206,7 +209,7 @@ def dts_tga():
 H41_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H41&filetype=zip"
 H41_SERIES = {
     "tga": "RESPPLLDT_N.WW",       # U.S. Treasury, General Account: Wednesday level
-    "reserves": "RESPPLLDE_N.WW",  # Deposits held by depository institutions (지급준비금): Wednesday level
+    "reserves": "RESH4R_N.WW",     # Reserve balances with Federal Reserve Banks: Wednesday level (2002~ 연속)
     "bills": "RESPPALGUOB_N.WW",   # Treasury securities held outright: Bills: Wednesday level
     "walcl": "RESPPA_N.WW",        # Total assets: Wednesday level
     "rrp": "RESPPLLRD_N.WW",       # Reverse repurchase agreements: Others (ON RRP): Wednesday level
@@ -577,7 +580,8 @@ def main():
     # IORB = 연방기금 목표범위 상단 − 10bp (2021년 7월 이후 동일한 설정)
     raw["iorb"] = with_fallback(
         "IORB", raw["iorb"],
-        lambda: {k: round(v - 0.10, 3) for k, v in nyfed_rates("unsecured/effr")[1].items()},
+        # IORB는 2021-07-29 도입. 그 전(IOER 시절)은 목표범위와의 차이가 달라 비워 둔다
+        lambda: {k: round(v - 0.10, 3) for k, v in nyfed_rates("unsecured/effr")[1].items() if k >= "2021-07-29"},
     )
     if not raw["tga"]:
         raise RuntimeError("TGA 데이터를 어떤 소스에서도 받지 못했습니다")
