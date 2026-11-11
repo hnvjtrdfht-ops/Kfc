@@ -47,7 +47,9 @@ h2{font-size:17px;margin:0 0 4px}
 .sub{color:var(--text-2);margin:0}
 .muted{color:var(--text-3);font-size:13px}
 .num{font-variant-numeric:tabular-nums}
-header{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:flex-end;margin-bottom:22px}
+header{display:flex;flex-wrap:wrap;gap:16px;justify-content:space-between;align-items:flex-start;margin-bottom:22px}
+.toolbar.top{align-items:flex-start;flex-wrap:nowrap}
+@media (max-width:560px){.toolbar.top{width:100%}.toolbar.top .btc{flex:1;width:auto}}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 button,.btn{font:inherit;font-size:13px;color:var(--text-2);background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px 10px;cursor:pointer}
 button[aria-pressed="true"]{color:var(--text);border-color:var(--text-3);background:var(--surface-2)}
@@ -62,9 +64,15 @@ section{margin-top:26px}
 @media (max-width:560px){.g3,.g4,.g2{grid-template-columns:1fr}h1{font-size:23px}}
 
 /* BTC live strip */
-.btc{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.btc{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;width:340px;max-width:100%}
 .btc .px{font-size:22px;font-weight:700}
 .chg.up{color:var(--good)} .chg.down{color:var(--crit)}
+.odds{flex-basis:100%;display:flex;flex-direction:column;gap:2px;border-top:1px dashed var(--border);padding-top:6px;margin-top:2px;font-size:13px}
+.odds:empty{display:none}
+.odds .row{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.odds .up{color:var(--good);font-weight:700} .odds .dn{color:var(--crit);font-weight:700}
+.odds .bar{display:flex;height:6px;border-radius:3px;overflow:hidden;gap:2px;margin:2px 0}
+.odds .bar i{display:block;height:100%}
 
 /* hero verdict */
 .verdict{display:grid;grid-template-columns:auto 1fr;gap:18px;align-items:start;border-left:4px solid var(--tone,var(--neutral));padding:20px 22px}
@@ -107,6 +115,7 @@ th{font-weight:500;color:var(--text-3)}
 th:first-child,td:first-child{text-align:left}
 td.l,th.l{text-align:left}
 .tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+#corrBox td{white-space:normal}
 .pos{color:var(--good)} .neg{color:var(--crit)}
 
 /* reference table */
@@ -135,11 +144,12 @@ a{color:var(--s1)}
       <p class="sub">역레포가 비었는지 → 연준이 사고 있는지 → TGA는 마지막에. 주간 트래킹 · BTC/USDT 연결</p>
       <div class="order"><span class="o">① 역레포 완충재</span><span class="arrow">→</span><span class="o">② 연준 단기채 매입</span><span class="arrow">→</span><span class="o">③ TGA</span><span class="arrow">→</span><span class="o">지준 · 단기금리 · BTC</span></div>
     </div>
-    <div class="toolbar">
+    <div class="toolbar top">
       <div class="card btc" style="padding:10px 14px">
         <span class="muted">BTC/USDT</span>
         <span class="px num" id="btcPx">—</span>
         <span class="chg num" id="btcChg"></span>
+        <div class="odds" id="btcOdds"></div>
       </div>
       <button id="themeBtn" type="button" title="테마 전환">테마</button>
     </div>

@@ -237,6 +237,7 @@
 
     renderDecomp(cur);
     renderScenarioStats(W);
+    renderOdds(W);
     renderCalendar(data, cur);
     renderHistory(W);
     renderRef(cur.scenario);
@@ -265,6 +266,31 @@
       const left = v >= 0 ? 50 : 50 - pct;
       return `<div>${lab}</div><div class="bar" title="${lab} ${fmtB(v, true)}"><div class="fill" style="left:${left}%;width:${Math.max(pct, 0.6)}%;background:var(${supply ? "--pos" : "--neg"})"></div></div><div class="val num">${fmtShort(v, true)}</div>`;
     }).join("");
+  }
+
+  // 다음 주(수→수, 7일) BTC 수익률의 과거 분포. filter(w) 가 참인 주 다음 주를 모은다.
+  function nextWeek(W, filter) {
+    const r = [];
+    for (let i = 1; i < W.length - 1; i++) if (filter(W[i]) && W[i + 1].btc_ret != null) r.push(W[i + 1].btc_ret);
+    const n = r.length;
+    if (!n) return null;
+    const up = r.filter((x) => x > 0).length;
+    return { n, up: (up / n) * 100, avg: r.reduce((a, b) => a + b, 0) / n };
+  }
+
+  function renderOdds(W) {
+    const cur = W[W.length - 1];
+    const sc = SCEN[cur.scenario] || SCEN.N;
+    const all = nextWeek(W, () => true);
+    let s = nextWeek(W, (w) => w.scenario === cur.scenario);
+    let basis = `판정 ${sc.k}(${sc.title}) 이후 과거 ${s ? s.n : 0}주`;
+    if (!s || s.n < 8) { s = all; basis = `표본 부족 — 전체 ${all ? all.n : 0}주 기준`; }
+    if (!s) return;
+    const up = s.up, dn = 100 - s.up;
+    $("#btcOdds").innerHTML = `
+      <div class="row"><span class="muted">향후 7일</span><span class="up">▲ 상승 ${up.toFixed(0)}%</span><span class="dn">▼ 하락 ${dn.toFixed(0)}%</span><span class="muted num">평균 ${fmtPct(s.avg, 1)}</span></div>
+      <div class="bar" aria-hidden="true"><i style="width:${up}%;background:var(--good)"></i><i style="width:${dn}%;background:var(--crit)"></i></div>
+      <div class="muted" style="font-size:12px">${esc(basis)} · 전체 평균 ${all.up.toFixed(0)}%<br>과거 빈도일 뿐 예측이 아닙니다</div>`;
   }
 
   function renderScenarioStats(W) {
