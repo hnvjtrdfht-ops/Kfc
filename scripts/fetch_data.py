@@ -209,7 +209,7 @@ def dts_tga():
 H41_URL = "https://www.federalreserve.gov/datadownload/Output.aspx?rel=H41&filetype=zip"
 H41_SERIES = {
     "tga": "RESPPLLDT_N.WW",       # U.S. Treasury, General Account: Wednesday level
-    "reserves": "RESPPLLDE_N.WW",  # Deposits held by depository institutions (지급준비금): Wednesday level
+    "reserves": "RESH4R_N.WW",     # Reserve balances with Federal Reserve Banks: Wednesday level (2002~ 연속)
     "bills": "RESPPALGUOB_N.WW",   # Treasury securities held outright: Bills: Wednesday level
     "walcl": "RESPPA_N.WW",        # Total assets: Wednesday level
     "rrp": "RESPPLLRD_N.WW",       # Reverse repurchase agreements: Others (ON RRP): Wednesday level
