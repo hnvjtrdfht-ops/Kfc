@@ -57,24 +57,44 @@ TH = {
 }
 
 
-def get(url, tries=4, timeout=40):
+BROWSER_UA = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "text/csv,application/json,*/*",
+}
+
+
+def get(url, tries=4, timeout=40, headers=None):
     last = None
     for i in range(tries):
         try:
-            req = urllib.request.Request(url, headers=UA)
+            req = urllib.request.Request(url, headers=headers or UA)
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.read().decode("utf-8")
         except Exception as e:  # noqa: BLE001
             last = e
-            time.sleep(2 ** (i + 1))
+            if i < tries - 1:
+                time.sleep(2 ** (i + 1))
     raise RuntimeError(f"GET 실패 {url}: {last}")
 
 
-def fred(series_id):
+def _fred_api(series_id, key):
+    url = "https://api.stlouisfed.org/fred/series/observations?" + urllib.parse.urlencode(
+        {"series_id": series_id, "api_key": key, "file_type": "json", "observation_start": START.isoformat()}
+    )
+    out = {}
+    for o in json.loads(get(url, tries=3, timeout=40)).get("observations", []):
+        try:
+            out[o["date"]] = float(o["value"])
+        except (KeyError, ValueError):
+            continue
+    return out
+
+
+def _fred_csv(series_id):
     url = "https://fred.stlouisfed.org/graph/fredgraph.csv?" + urllib.parse.urlencode(
         {"id": series_id, "cosd": START.isoformat()}
     )
-    rows = list(csv.reader(io.StringIO(get(url))))
+    rows = list(csv.reader(io.StringIO(get(url, tries=2, timeout=30, headers=BROWSER_UA))))
     out = {}
     for row in rows[1:]:
         if len(row) < 2 or row[1] in ("", "."):
@@ -83,16 +103,113 @@ def fred(series_id):
             out[row[0]] = float(row[1])
         except ValueError:
             continue
-    if not out:
-        raise RuntimeError(f"FRED {series_id}: 데이터 없음")
     return out
+
+
+_FRED_DOWN = False
+
+
+def fred(series_id):
+    """FRED_API_KEY 가 있으면 공식 API, 없으면 fredgraph.csv. 실패하면 빈 dict."""
+    global _FRED_DOWN
+    key = os.environ.get("FRED_API_KEY", "").strip()
+    try:
+        if key:
+            return _fred_api(series_id, key)
+        if _FRED_DOWN:
+            return {}
+        return _fred_csv(series_id)
+    except Exception as e:  # noqa: BLE001
+        print(f"FRED {series_id} 실패: {e}", file=sys.stderr)
+        if not key:
+            _FRED_DOWN = True  # 같은 원인으로 나머지도 막힐 테니 시간 낭비하지 않음
+        return {}
 
 
 def to_billions(series):
     """FRED 단위가 백만 달러면 십억 달러로 바꾼다 (최댓값 크기로 판별)."""
-    if max(series.values()) > 50_000:
+    if series and max(series.values()) > 50_000:
         return {k: v / 1000.0 for k, v in series.items()}
     return series
+
+
+# ---------- FRED 대체 소스 (키 없이 쓰는 공공 API) ----------
+NYFED = "https://markets.newyorkfed.org/api"
+
+
+def _chunks(days=360):
+    s = START
+    end = date.today()
+    while s <= end:
+        e = min(end, s + timedelta(days=days))
+        yield s.isoformat(), e.isoformat()
+        s = e + timedelta(days=1)
+
+
+def nyfed_rrp():
+    """ON RRP 일간 낙찰액 (십억 달러)."""
+    out = {}
+    for a, b in _chunks():
+        j = json.loads(get(f"{NYFED}/rp/reverserepo/all/results/search.json?startDate={a}&endDate={b}"))
+        for op in (j.get("repo") or {}).get("operations", []):
+            d = op.get("operationDate")
+            v = op.get("totalAmtAccepted")
+            if d and v is not None:
+                out[d] = out.get(d, 0.0) + float(v) / 1e9
+    return out
+
+
+def nyfed_rates(kind):
+    """kind: 'secured/sofr' 또는 'unsecured/effr'. effr 는 목표범위 상단도 함께."""
+    rate, top = {}, {}
+    for a, b in _chunks():
+        j = json.loads(get(f"{NYFED}/rates/{kind}/search.json?startDate={a}&endDate={b}"))
+        for r in j.get("refRates", []):
+            d = r.get("effectiveDate")
+            if not d:
+                continue
+            if r.get("percentRate") is not None:
+                rate[d] = float(r["percentRate"])
+            if r.get("targetRateTo") is not None:
+                top[d] = float(r["targetRateTo"])
+    return rate, top
+
+
+def dts_tga():
+    """재무부 DTS 일간 TGA 마감잔액 (십억 달러)."""
+    out = {}
+    page = 1
+    while True:
+        rows = fiscal(
+            "/v1/accounting/dts/operating_cash_balance",
+            {"filter": f"record_date:gte:{START.isoformat()}", "sort": "record_date",
+             "page[size]": "10000", "page[number]": str(page)},
+        )
+        for r in rows:
+            acct = (r.get("account_type") or "").lower()
+            if "closing balance" in acct and ("tga" in acct or "general account" in acct):
+                for f in ("open_today_bal", "close_today_bal"):
+                    try:
+                        out[r["record_date"]] = float(r.get(f)) / 1000.0
+                        break
+                    except (TypeError, ValueError):
+                        continue
+        if len(rows) < 10000:
+            break
+        page += 1
+    return out
+
+
+def with_fallback(name, primary, fallback):
+    if primary:
+        return primary
+    try:
+        data = fallback()
+        print(f"{name}: 대체 소스 사용 ({len(data)}개)", file=sys.stderr)
+        return data
+    except Exception as e:  # noqa: BLE001
+        print(f"{name}: 대체 소스도 실패 {e}", file=sys.stderr)
+        return {}
 
 
 # ---------- BTC/USDT 일봉 ----------
@@ -291,19 +408,40 @@ def main():
     for key, sid in FRED.items():
         s = fred(sid)
         raw[key] = s if key in RATE_SERIES else to_billions(s)
-        print(f"FRED {sid}: {len(s)}개, 최신 {max(s)}", file=sys.stderr)
+        print(f"FRED {sid}: {len(s)}개" + (f", 최신 {max(s)}" if s else ""), file=sys.stderr)
+
+    # FRED가 막혔을 때 공공 API로 대체
+    raw["tga"] = with_fallback("TGA", raw["tga"], dts_tga)
+    raw["rrp"] = with_fallback("역레포", raw["rrp"], nyfed_rrp)
+    raw["sofr"] = with_fallback("SOFR", raw["sofr"], lambda: nyfed_rates("secured/sofr")[0])
+    # IORB = 연방기금 목표범위 상단 − 10bp (2021년 7월 이후 동일한 설정)
+    raw["iorb"] = with_fallback(
+        "IORB", raw["iorb"],
+        lambda: {k: round(v - 0.10, 3) for k, v in nyfed_rates("unsecured/effr")[1].items()},
+    )
+    if not raw["tga"]:
+        raise RuntimeError("TGA 데이터를 어떤 소스에서도 받지 못했습니다")
+    missing = [k for k in FRED if not raw[k]]
+    if missing:
+        print(f"경고: 비어 있는 시리즈 {missing} — FRED_API_KEY 시크릿을 추가하면 해결됩니다", file=sys.stderr)
 
     btc_src, btc = btc_daily()
     raw["btc"] = btc
     keys = {k: sorted(v) for k, v in raw.items()}
 
-    weeks_dates = [d for d in keys["tga"] if d >= START.isoformat()]
+    # 주간 기준일 = 수요일 (H.4.1). TGA가 있는 마지막 날까지.
+    last_tga = date.fromisoformat(keys["tga"][-1])
+    d0 = START + timedelta(days=(2 - START.weekday()) % 7)
+    weeks_dates = []
+    while d0 <= last_tga:
+        weeks_dates.append(d0.isoformat())
+        d0 += timedelta(days=7)
     weeks = []
     for d in weeks_dates:
         start = (date.fromisoformat(d) - timedelta(days=6)).isoformat()
         w = {
             "date": d,
-            "tga": raw["tga"][d],
+            "tga": asof(raw["tga"], keys["tga"], d),
             "rrp": asof(raw["rrp"], keys["rrp"], d),
             "reserves": asof(raw["reserves"], keys["reserves"], d),
             "bills": asof(raw["bills"], keys["bills"], d),
@@ -379,6 +517,7 @@ def main():
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "units": "십억 달러 (금리는 %)",
         "btc_source": btc_src + " BTC/USDT 일봉 종가",
+        "missing_series": missing,
         "thresholds": TH,
         "debt_ceiling": DEBT_CEILING,
         "weeks": weeks,
