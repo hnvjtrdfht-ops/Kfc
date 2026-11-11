@@ -23,6 +23,8 @@ from datetime import date, datetime, timedelta, timezone
 
 START = date(2022, 1, 1)
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "tga.json")
+PRED_LOG = os.path.join(os.path.dirname(OUT), "predictions.json")
+MIN_SAMPLE = 8  # 같은 판정 표본이 이보다 적으면 전체 기준
 UA = {"User-Agent": "tga-weekly-tracker/1.0"}
 
 # FRED 시리즈 (API 키 불필요한 fredgraph.csv 사용)
@@ -454,6 +456,106 @@ def classify(w):
     return "1" if w["rrp_state"] == "ample" else "2"
 
 
+# ---------- BTC 7일 방향 확률 (워크포워드) ----------
+MODELS = {
+    "base": "전체 평균",
+    "scenario": "판정 조건",
+    "liq": "순유동성 4주 방향",
+    "mom": "BTC 4주 추세",
+    "scen_liq": "판정 × 순유동성",
+}
+SHRINK = 10      # 조건부 표본을 전체 평균 쪽으로 당기는 강도 (가짜 표본 수)
+SELECT_WIN = 52  # 최근 몇 주 성적으로 모델을 고를지
+SELECT_MIN = 26  # 이만큼 채점된 뒤부터 모델 선택
+
+
+def _features(weeks, i):
+    w = weeks[i]
+    p4 = weeks[i - 4] if i >= 4 else None
+    liq = mom = None
+    if p4 and w.get("net_liq") is not None and p4.get("net_liq") is not None:
+        liq = "up" if w["net_liq"] > p4["net_liq"] else "down"
+    if p4 and w.get("btc") and p4.get("btc"):
+        mom = "up" if w["btc"] > p4["btc"] else "down"
+    return {"base": "all", "scenario": w["scenario"], "liq": liq, "mom": mom,
+            "scen_liq": None if liq is None else f"{w['scenario']}|{liq}"}
+
+
+def _brier(rows):
+    return sum((p / 100.0 - o) ** 2 for p, o in rows) / len(rows) if rows else None
+
+
+def _hit(rows):
+    d = [(p, o) for p, o in rows if p != 50]
+    return 100.0 * sum(1 for p, o in d if (p > 50) == (o == 1)) / len(d) if d else None
+
+
+def predict_walk_forward(weeks):
+    """각 주에 대해, 그 주까지 결과가 확정된 과거만으로 다음 7일 BTC 상승 확률을 모델별로 계산.
+    맨 위에 쓸 확률은 '직전까지 채점된' 최근 성적(Brier)이 가장 좋은 모델로 고른다."""
+    feats = [_features(weeks, i) for i in range(len(weeks))]
+    for i, w in enumerate(weeks):
+        hist = [j for j in range(1, i) if weeks[j + 1]["btc_ret"] is not None]
+        w["preds"] = {}
+        w["pred_n"] = {}
+        if len(hist) >= MIN_SAMPLE:
+            ups = {j: 1 if weeks[j + 1]["btc_ret"] > 0 else 0 for j in hist}
+            base = sum(ups.values()) / len(hist)
+            for m in MODELS:
+                key = feats[i][m]
+                if key is None:
+                    continue
+                match = [ups[j] for j in hist if feats[j][m] == key]
+                p = (sum(match) + SHRINK * base) / (len(match) + SHRINK) if m != "base" else base
+                w["preds"][m] = round(100 * p, 1)
+                w["pred_n"][m] = len(match)
+        w["next_ret"] = weeks[i + 1]["btc_ret"] if i + 1 < len(weeks) else None
+
+    for i, w in enumerate(weeks):
+        scored = [k for k in range(i) if weeks[k]["next_ret"] is not None and k + 1 <= i and weeks[k]["preds"]][-SELECT_WIN:]
+        chosen = "scenario"
+        if len(scored) >= SELECT_MIN:
+            best = None
+            for m in MODELS:
+                rows = [(weeks[k]["preds"][m], 1 if weeks[k]["next_ret"] > 0 else 0) for k in scored if m in weeks[k]["preds"]]
+                if len(rows) < SELECT_MIN:
+                    continue
+                b = _brier(rows)
+                if best is None or b < best[0]:
+                    best = (b, m)
+            if best:
+                chosen = best[1]
+        if chosen not in w["preds"]:
+            chosen = "base" if "base" in w["preds"] else None
+        w["p_model"] = chosen
+        w["p_up"] = w["preds"].get(chosen) if chosen else None
+        w["p_n"] = w["pred_n"].get(chosen) if chosen else None
+
+
+def score_models(weeks):
+    out = {}
+    done = [w for w in weeks if w["next_ret"] is not None and w["preds"]]
+    for m in list(MODELS) + ["selected"]:
+        def rows(ws):
+            r = []
+            for w in ws:
+                p = w["p_up"] if m == "selected" else w["preds"].get(m)
+                if p is not None:
+                    r.append((p, 1 if w["next_ret"] > 0 else 0))
+            return r
+        r_all, r52 = rows(done), rows(done[-52:])
+        out[m] = {
+            "label": MODELS.get(m, "자동 선택"),
+            "brier_52": None if not r52 else round(_brier(r52), 4),
+            "hit_52": None if not r52 else round(_hit(r52), 1),
+            "n_52": len(r52),
+            "brier_all": None if not r_all else round(_brier(r_all), 4),
+            "hit_all": None if not r_all else round(_hit(r_all), 1),
+            "n_all": len(r_all),
+        }
+    return out
+
+
 def r1(x):
     return None if x is None else round(x, 1)
 
@@ -546,6 +648,9 @@ def main():
             w["btc_ret"] = round((w["btc"] / p["btc"] - 1) * 100, 2)
         w["scenario"] = classify(w)
 
+    predict_walk_forward(weeks)
+    model_scores = score_models(weeks)
+
     for w in weeks:
         for k in list(w):
             if isinstance(w[k], float) and k not in ("sofr", "sofr_max", "iorb", "btc_ret", "spread_bp"):
@@ -579,11 +684,28 @@ def main():
         "thresholds": TH,
         "debt_ceiling": DEBT_CEILING,
         "weeks": weeks,
+        "models": MODELS,
+        "model_scores": model_scores,
         "rrp_daily": rrp_daily,
         "btc_daily": btc_daily_recent,
         **extras,
     }
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
+    # 실시간 예측 기록: 주마다 처음 계산된 확률을 고정해 남긴다 (나중에 덮어쓰지 않음)
+    log = []
+    if os.path.exists(PRED_LOG):
+        with open(PRED_LOG, encoding="utf-8") as f:
+            log = json.load(f)
+    last = weeks[-1]
+    if last.get("p_up") is not None and not any(e["week"] == last["date"] for e in log):
+        log.append({
+            "week": last["date"], "scenario": last["scenario"], "p_up": last["p_up"],
+            "model": last["p_model"], "n": last["p_n"], "preds": last["preds"], "btc_at": last["btc"],
+            "logged_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+        with open(PRED_LOG, "w", encoding="utf-8") as f:
+            json.dump(log, f, ensure_ascii=False, indent=1)
+    out["pred_log"] = log
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
     last = weeks[-1]
