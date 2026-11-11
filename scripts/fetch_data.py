@@ -150,7 +150,7 @@ def nyfed_rrp():
     """ON RRP 일간 낙찰액 (십억 달러)."""
     out = {}
     for a, b in _chunks():
-        j = json.loads(get(f"{NYFED}/rp/reverserepo/all/results/search.json?startDate={a}&endDate={b}"))
+        j = json.loads(get(f"{NYFED}/rp/reverserepo/propositions/search.json?startDate={a}&endDate={b}"))
         for op in (j.get("repo") or {}).get("operations", []):
             d = op.get("operationDate")
             v = op.get("totalAmtAccepted")
@@ -313,7 +313,10 @@ def tga_daily_latest():
 
 
 def upcoming_auctions():
-    rows = fiscal("/v1/accounting/od/upcoming_auctions", {"sort": "issue_date", "page[size]": "100"})
+    rows = fiscal(
+        "/v1/accounting/od/upcoming_auctions",
+        {"filter": f"issue_date:gte:{date.today().isoformat()}", "sort": "issue_date", "page[size]": "100"},
+    )
     out = []
     for r in rows:
         amt = r.get("offering_amt")
