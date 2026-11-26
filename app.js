@@ -218,7 +218,7 @@
     </section>
 
     <section id="verify">
-      <div class="sec-head"><div><h2>확률 검증</h2><span class="muted">상단 '향후 7일' 확률이 실제로 맞았는지 · 2주마다 점검</span></div></div>
+      <div class="sec-head"><div><h2>확률 검증</h2><span class="muted">상단 BTC 상승 확률(7일·4주·12주)이 실제로 맞았는지 · 2주마다 점검</span></div></div>
       <div id="verifyBox"></div>
     </section>
 
@@ -286,39 +286,43 @@
 
   function renderOdds(W, data) {
     const cur = W[W.length - 1];
-    const all = nextWeek(W, () => true);
-    let up = cur.p_up, label, n = cur.p_n, avg = null;
-    const M = { avg: "다섯 방식 평균", ...(data.models || {}) };
-    if (up != null) {
-      label = cur.p_model === "avg" ? `다섯 방식 평균 · 과거 ${n}주` : `${M[cur.p_model] || cur.p_model} 방식 · 비슷한 과거 ${n}주`;
-    } else {
-      const s = nextWeek(W, (w) => w.scenario === cur.scenario) || all;
-      if (!s) return;
-      up = s.up; label = `과거 ${s.n}주`;
-    }
-    const sel = (data.model_scores || {}).selected;
-    const verdict = sel && sel.brier_52 != null ? (sel.brier_52 < 0.25 ? `최근 1년 적중률 ${sel.hit_52}% · 동전보다 나음` : `최근 1년 적중률 ${sel.hit_52}% · 아직 동전 던지기 수준`) : "";
-    const dn = 100 - up;
-    $("#btcOdds").innerHTML = `
-      <div class="row"><span class="muted">향후 7일</span><span class="up">▲ 상승 ${up.toFixed(0)}%</span><span class="dn">▼ 하락 ${dn.toFixed(0)}%</span></div>
-      <div class="bar" aria-hidden="true"><i style="width:${up}%;background:var(--good)"></i><i style="width:${dn}%;background:var(--crit)"></i></div>
-      <div class="muted" style="font-size:12px">${esc(label)}${all ? ` · 전체 평균 ${all.up.toFixed(0)}%` : ""}<br>${esc(verdict)}${verdict ? " · " : ""}<a href="#verify">검증 보기</a></div>`;
+    const H = data.horizons || { 1: "7일" };
+    const SH = data.model_scores_h || { 1: data.model_scores || {} };
+    const rows = Object.keys(H).map((h) => {
+      const fc = (cur.fc || {})[h] || (h === "1" ? { p: cur.p_up } : null);
+      if (!fc || fc.p == null) return "";
+      const up = fc.p, dn = 100 - up;
+      const sel = (SH[h] || {}).selected;
+      const sk = sel && sel.bss_all != null ? sel.bss_all : null;
+      const skill = sk == null ? "" : sk > 0 ? `<span class="pos">기본선 +${sk}%</span>` : `<span class="muted">기본선 ${sk}%</span>`;
+      return `<div class="row"><span class="muted" style="min-width:30px">${esc(H[h])}</span><span class="up">▲ ${up.toFixed(0)}%</span><span class="dn">▼ ${dn.toFixed(0)}%</span><span style="font-size:12px">${skill}</span></div>
+        <div class="bar" aria-hidden="true"><i style="width:${up}%;background:var(--good)"></i><i style="width:${dn}%;background:var(--crit)"></i></div>`;
+    }).join("");
+    if (!rows) return;
+    $("#btcOdds").innerHTML = `<div class="muted" style="font-size:12px">BTC 상승 확률 · 전체 방식 평균</div>${rows}
+      <div class="muted" style="font-size:12px">기본선 = 과거 전체 상승 비율만 쓴 예측. +면 지표가 도움, −면 방해 · <a href="#verify">검증 보기</a></div>`;
   }
 
   function renderVerify(W, data) {
     const S = data.model_scores || {};
-    const M = { avg: "다섯 방식 평균", ...(data.models || {}) };
+    const SH = data.model_scores_h || { 1: S };
+    const H = data.horizons || { 1: "7일" };
+    const M = { avg: "전체 방식 평균", ...(data.models || {}) };
     const cur = W[W.length - 1];
     const box = $("#verifyBox");
     if (!S.selected) { box.innerHTML = `<div class="muted">검증 데이터가 아직 없습니다.</div>`; return; }
-    const b = (v) => (v == null ? "—" : v.toFixed(3));
-    const tag = (v) => (v == null ? "" : v < 0.25 ? chip("동전보다 나음", "--good") : chip("동전 수준 이하", "--neutral"));
-    const order = ["selected", ...Object.keys(M)];
-    const rows = order.filter((k) => S[k]).map((k) => {
-      const v = S[k];
-      const now = k === "selected" ? " ← 상단 확률" : "";
-      return `<tr${k === "selected" ? ' style="background:var(--surface-2)"' : ""}><td class="l">${esc(v.label)}<span class="muted">${now}</span></td><td class="num">${b(v.brier_52)}</td><td class="num">${v.hit_52 == null ? "—" : v.hit_52 + "%"}</td><td class="num">${b(v.brier_all)}</td><td class="num">${v.hit_all == null ? "—" : v.hit_all + "%"}</td><td class="l">${tag(v.brier_52)}</td></tr>`;
+    const hk = Object.keys(H);
+    const cell = (v) => {
+      if (!v || v.bss_all == null) return `<td class="num">—</td><td class="num muted">—</td>`;
+      const c = v.bss_all > 0 ? "pos" : v.bss_all < 0 ? "neg" : "";
+      return `<td class="num ${c}">${v.bss_all > 0 ? "+" : ""}${v.bss_all}%</td><td class="num muted">${v.hit_all}%</td>`;
+    };
+    const order = ["selected", ...Object.keys(data.models || {})];
+    const rows = order.filter((k) => hk.some((h) => (SH[h] || {})[k])).map((k) => {
+      const lab = ((SH[hk[0]] || {})[k] || {}).label || M[k] || k;
+      return `<tr${k === "selected" ? ' style="background:var(--surface-2)"' : ""}><td class="l">${esc(lab)}${k === "selected" ? '<span class="muted"> ← 상단 확률</span>' : ""}</td>${hk.map((h) => cell((SH[h] || {})[k])).join("")}</tr>`;
     }).join("");
+    const nInfo = hk.map((h) => `${H[h]} ${((SH[h] || {}).base || {}).n_all || 0}주`).join(" · ");
 
     // 최근 2주 채점
     const done = W.filter((w) => w.next_ret != null && w.p_up != null);
@@ -339,20 +343,26 @@
     const logRows = log.map((e) => {
       const w = byDate[e.week]; const r = w ? w.next_ret : null;
       const res = r == null ? '<span class="muted">결과 대기</span>' : (e.p_up === 50 ? "—" : (e.p_up > 50) === (r > 0) ? '<span class="pos">✓ 적중</span>' : '<span class="neg">✗ 빗나감</span>');
-      return `<tr><td class="l num">${ymd(e.week)}</td><td class="num">상승 ${(+e.p_up).toFixed(0)}%</td><td class="l muted">${esc(M[e.model] || e.model || "")}</td><td class="num ${cls(r)}">${r == null ? "—" : fmtPct(r)}</td><td class="l">${res}</td></tr>`;
+      const longer = ["4", "12"].map((h) => {
+        const p = e["p" + h]; if (p == null) return `<td class="num muted">—</td>`;
+        const rr = w && w.fwd ? w.fwd[h] : null;
+        const mark = rr == null ? '<span class="muted">대기</span>' : (p > 50) === (rr > 0) ? '<span class="pos">✓</span>' : '<span class="neg">✗</span>';
+        return `<td class="num">${(+p).toFixed(0)}% ${mark}</td>`;
+      }).join("");
+      return `<tr><td class="l num">${ymd(e.week)}</td><td class="num">상승 ${(+e.p_up).toFixed(0)}%</td><td class="l muted">${esc(M[e.model] || e.model || "")}</td><td class="num ${cls(r)}">${r == null ? "—" : fmtPct(r)}</td><td class="l">${res}</td>${longer}</tr>`;
     }).join("");
     const liveDone = log.filter((e) => byDate[e.week] && byDate[e.week].next_ret != null && e.p_up !== 50);
     const liveHit = liveDone.length ? (liveDone.filter((e) => (e.p_up > 50) === (byDate[e.week].next_ret > 0)).length / liveDone.length) * 100 : null;
 
     box.innerHTML = `
-      <div class="grid g2">
+      <div class="grid">
         <div class="card tscroll">
-          <div class="kpi"><div class="lab">방식별 성적 (Brier 점수: 낮을수록 좋음, 동전 던지기 = 0.250)</div></div>
-          <table style="margin-top:8px"><thead><tr><th class="l">방식</th><th>1년 Brier</th><th>1년 적중</th><th>전체 Brier</th><th>전체 적중</th><th class="l"></th></tr></thead><tbody>${rows}</tbody></table>
-          <p class="muted" style="margin:10px 0 0">모든 확률은 그 주에 결과가 나와 있던 과거만으로 계산했습니다. 상단 확률은 아래 다섯 방식의 평균입니다(11/26부터, 그 전 실시간 기록은 1년 성적 1위 방식).</p>
+          <div class="kpi"><div class="lab">방식별 성적: 기본선 대비 개선 · 방향 적중률 (2017년~)</div></div>
+          <table style="margin-top:8px"><thead><tr><th class="l" rowspan="2">방식</th>${hk.map((h) => `<th colspan="2" style="text-align:center">${esc(H[h])}</th>`).join("")}</tr><tr>${hk.map(() => "<th>개선</th><th>적중</th>").join("")}</tr></thead><tbody>${rows}</tbody></table>
+          <p class="muted" style="margin:10px 0 0">개선 = 과거 전체 상승 비율만 쓴 기본선보다 Brier 점수가 몇 % 좋은지. <span class="pos">+</span>면 그 지표가 도움, <span class="neg">−</span>면 오히려 방해입니다. 모든 확률은 그 주에 결과가 확정된 과거만으로 계산했습니다(${nInfo}). 4주·12주는 기간이 겹쳐 실제 독립 표본은 더 적습니다.</p>
         </div>
-        <div class="grid">
-          <div class="card tscroll"><div class="kpi"><div class="lab">최근 2주 채점</div></div>
+        <div class="grid g2">
+          <div class="card tscroll"><div class="kpi"><div class="lab">최근 2주 채점 (7일, 현재 방식으로 재계산)</div></div>
             <table style="margin-top:8px"><tbody>${recentRows || '<tr><td class="muted">—</td></tr>'}</tbody></table></div>
           <div class="card tscroll"><div class="kpi"><div class="lab">확률 구간별 실제 상승 비율 (전체 기간)</div></div>
             <table style="margin-top:8px"><thead><tr><th class="l">예측 상승확률</th><th>주 수</th><th>실제 상승</th></tr></thead><tbody>${buckets}</tbody></table></div>
@@ -360,7 +370,7 @@
       </div>
       <div class="card tscroll" style="margin-top:12px">
         <div class="kpi"><div class="lab">실시간 기록 (매주 처음 낸 확률을 고정 저장, 사후 수정 없음)${liveHit != null ? ` · 적중률 ${liveHit.toFixed(0)}% (${liveDone.length}주)` : ""}</div></div>
-        ${logRows ? `<table style="margin-top:8px"><thead><tr><th class="l">기준일</th><th>예측</th><th class="l">방식</th><th>실제 7일</th><th class="l">결과</th></tr></thead><tbody>${logRows}</tbody></table>` : `<p class="muted" style="margin:8px 0 0">이번 주부터 기록을 시작합니다.</p>`}
+        ${logRows ? `<table style="margin-top:8px"><thead><tr><th class="l">기준일</th><th>7일 예측</th><th class="l">방식</th><th>실제 7일</th><th class="l">결과</th><th>4주 예측</th><th>12주 예측</th></tr></thead><tbody>${logRows}</tbody></table>` : `<p class="muted" style="margin:8px 0 0">이번 주부터 기록을 시작합니다.</p>`}
       </div>`;
   }
 
