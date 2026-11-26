@@ -257,6 +257,74 @@ def h41_all():
     return out
 
 
+# ---------- 추가 지표 (확률 계산용) ----------
+def stablecoin_supply():
+    """스테이블코인 총 유통량 (십억 달러, 일간). DefiLlama. 전체가 안 되면 USDT만."""
+    for url in ("https://stablecoins.llama.fi/stablecoincharts/all",
+                "https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=1"):
+        try:
+            rows = json.loads(get(url, tries=2, timeout=60, headers=BROWSER_UA))
+            out = {}
+            for r in rows:
+                v = (r.get("totalCirculatingUSD") or {}).get("peggedUSD")
+                if v is None:
+                    continue
+                d = datetime.fromtimestamp(int(r["date"]), tz=timezone.utc).date().isoformat()
+                if d >= START.isoformat():
+                    out[d] = float(v) / 1e9
+            if len(out) > 300:
+                print(f"스테이블코인: {url} {len(out)}일", file=sys.stderr)
+                return out
+        except Exception as e:  # noqa: BLE001
+            print(f"스테이블코인 실패 {url}: {e}", file=sys.stderr)
+    return {}
+
+
+def dollar_index():
+    """연준 H.10 명목 광의 달러지수 (일간)."""
+    import xml.etree.ElementTree as ET
+    import zipfile
+    try:
+        req = urllib.request.Request("https://www.federalreserve.gov/datadownload/Output.aspx?rel=H10&filetype=zip", headers=BROWSER_UA)
+        with urllib.request.urlopen(req, timeout=120) as r:
+            z = zipfile.ZipFile(io.BytesIO(r.read()))
+        out = {}
+        with z.open("H10_data.xml") as f:
+            for _, el in ET.iterparse(f, events=("end",)):
+                if el.tag.split("}")[-1] != "Series":
+                    continue
+                if el.attrib.get("SERIES_NAME") == "JRXWTFB_N.B":
+                    for o in el:
+                        if o.tag.split("}")[-1] != "Obs":
+                            continue
+                        d = o.attrib.get("TIME_PERIOD", "")
+                        try:
+                            v = float(o.attrib.get("OBS_VALUE"))
+                        except (TypeError, ValueError):
+                            continue
+                        if d >= START.isoformat() and v > 0:
+                            out[d] = v
+                el.clear()
+        print(f"달러지수: {len(out)}일", file=sys.stderr)
+        return out
+    except Exception as e:  # noqa: BLE001
+        print(f"달러지수 실패: {e}", file=sys.stderr)
+        return {}
+
+
+def realized_vol(btc, keys_btc, d, days=28):
+    """d까지 days일 일간 로그수익률의 연율화 변동성(%)."""
+    import bisect
+    import math
+    i = bisect.bisect_right(keys_btc, d) - 1
+    if i < days:
+        return None
+    px = [btc[keys_btc[k]] for k in range(i - days, i + 1)]
+    r = [math.log(px[k + 1] / px[k]) for k in range(days)]
+    m = sum(r) / days
+    return math.sqrt(sum((x - m) ** 2 for x in r) / (days - 1)) * math.sqrt(365) * 100
+
+
 def with_fallback(name, primary, fallback):
     if primary:
         return primary
@@ -466,21 +534,43 @@ MODELS = {
     "liq": "순유동성 4주 방향",
     "mom": "BTC 4주 추세",
     "scen_liq": "판정 × 순유동성",
+    "stable": "스테이블코인 4주 증감",
+    "dxy": "달러지수 4주 방향",
+    "vol": "BTC 변동성 국면",
 }
+HORIZONS = {1: "7일", 4: "4주", 12: "12주"}
 SHRINK = 10      # 조건부 표본을 전체 평균 쪽으로 당기는 강도 (가짜 표본 수)
-AVG_LABEL = "다섯 방식 평균"  # 상단에 쓰는 확률 (2026-11-26부터. 그 전 실시간 기록은 1년 성적 1위 방식)
+AVG_LABEL = "전체 방식 평균"  # 상단 확률 = 계산된 방식들의 단순 평균
+
+
+def _dir4(weeks, i, key, up="up", down="down"):
+    if i < 4:
+        return None
+    a, b = weeks[i].get(key), weeks[i - 4].get(key)
+    if a is None or b is None:
+        return None
+    return up if a > b else down
 
 
 def _features(weeks, i):
     w = weeks[i]
-    p4 = weeks[i - 4] if i >= 4 else None
-    liq = mom = None
-    if p4 and w.get("net_liq") is not None and p4.get("net_liq") is not None:
-        liq = "up" if w["net_liq"] > p4["net_liq"] else "down"
-    if p4 and w.get("btc") and p4.get("btc"):
-        mom = "up" if w["btc"] > p4["btc"] else "down"
-    return {"base": "all", "scenario": w["scenario"], "liq": liq, "mom": mom,
-            "scen_liq": None if liq is None else f"{w['scenario']}|{liq}"}
+    liq = _dir4(weeks, i, "net_liq")
+    vol = None
+    if w.get("vol") is not None:
+        past = [weeks[k]["vol"] for k in range(max(0, i - 52), i) if weeks[k].get("vol") is not None]
+        if len(past) >= 26:
+            past.sort()
+            vol = "high" if w["vol"] > past[len(past) // 2] else "low"
+    return {
+        "base": "all",
+        "scenario": w["scenario"],
+        "liq": liq,
+        "mom": _dir4(weeks, i, "btc"),
+        "scen_liq": None if liq is None else f"{w['scenario']}|{liq}",
+        "stable": _dir4(weeks, i, "stable"),
+        "dxy": _dir4(weeks, i, "dxy", up="strong", down="weak"),
+        "vol": vol,
+    }
 
 
 def _brier(rows):
@@ -493,56 +583,71 @@ def _hit(rows):
 
 
 def predict_walk_forward(weeks):
-    """각 주에 대해, 그 주까지 결과가 확정된 과거만으로 다음 7일 BTC 상승 확률을 모델별로 계산.
-    맨 위에 쓸 확률은 그 주에 계산된 방식들의 단순 평균 (매주 1위로 갈아타는 것보다 덜 흔들림)."""
+    """기간(7일·4주·12주)별로, 그 주에 결과가 이미 확정된 과거만 써서 BTC 상승 확률을 방식별로 계산.
+    h주 뒤 결과는 h주가 지나야 확정되므로 j + h <= i 인 과거 주만 사용한다.
+    상단 확률은 계산된 방식들의 단순 평균."""
     feats = [_features(weeks, i) for i in range(len(weeks))]
-    for i, w in enumerate(weeks):
-        hist = [j for j in range(1, i) if weeks[j + 1]["btc_ret"] is not None]
-        w["preds"] = {}
-        w["pred_n"] = {}
-        if len(hist) >= MIN_SAMPLE:
-            ups = {j: 1 if weeks[j + 1]["btc_ret"] > 0 else 0 for j in hist}
-            base = sum(ups.values()) / len(hist)
-            for m in MODELS:
-                key = feats[i][m]
-                if key is None:
-                    continue
-                match = [ups[j] for j in hist if feats[j][m] == key]
-                p = (sum(match) + SHRINK * base) / (len(match) + SHRINK) if m != "base" else base
-                w["preds"][m] = round(100 * p, 1)
-                w["pred_n"][m] = len(match)
-        w["next_ret"] = weeks[i + 1]["btc_ret"] if i + 1 < len(weeks) else None
-
+    n = len(weeks)
     for w in weeks:
-        if w["preds"]:
-            w["p_model"] = "avg"
-            w["p_up"] = round(sum(w["preds"].values()) / len(w["preds"]), 1)
-            w["p_n"] = w["pred_n"].get("base")
-        else:
-            w["p_model"] = w["p_up"] = w["p_n"] = None
+        w["fwd"] = {}
+        w["fc"] = {}
+    for h in HORIZONS:
+        fwd = [None] * n
+        for i in range(n):
+            if i + h < n and weeks[i].get("btc") and weeks[i + h].get("btc"):
+                fwd[i] = (weeks[i + h]["btc"] / weeks[i]["btc"] - 1) * 100
+            weeks[i]["fwd"][str(h)] = None if fwd[i] is None else round(fwd[i], 2)
+        for i, w in enumerate(weeks):
+            hist = [j for j in range(1, i - h + 1) if fwd[j] is not None]
+            preds, cnt = {}, {}
+            if len(hist) >= MIN_SAMPLE:
+                ups = {j: 1 if fwd[j] > 0 else 0 for j in hist}
+                base = sum(ups.values()) / len(hist)
+                for m in MODELS:
+                    key = feats[i][m]
+                    if key is None:
+                        continue
+                    match = [ups[j] for j in hist if feats[j][m] == key]
+                    p = base if m == "base" else (sum(match) + SHRINK * base) / (len(match) + SHRINK)
+                    preds[m] = round(100 * p, 1)
+                    cnt[m] = len(match)
+            avg = round(sum(preds.values()) / len(preds), 1) if preds else None
+            w["fc"][str(h)] = {"preds": preds, "p": avg, "n": cnt.get("base")}
+            if h == 1:  # 기존 필드 호환
+                w["preds"], w["pred_n"] = preds, cnt
+                w["p_up"], w["p_model"], w["p_n"] = avg, ("avg" if preds else None), cnt.get("base")
+                w["next_ret"] = w["fwd"]["1"]
 
 
 def score_models(weeks):
+    """기간별·방식별 성적. bss = 전체 평균(기본선) 대비 Brier 개선율(%), 양수면 기본선보다 나음."""
     out = {}
-    done = [w for w in weeks if w["next_ret"] is not None and w["preds"]]
-    for m in list(MODELS) + ["selected"]:
-        def rows(ws):
-            r = []
-            for w in ws:
-                p = w["p_up"] if m == "selected" else w["preds"].get(m)
-                if p is not None:
-                    r.append((p, 1 if w["next_ret"] > 0 else 0))
-            return r
-        r_all, r52 = rows(done), rows(done[-52:])
-        out[m] = {
-            "label": MODELS.get(m, AVG_LABEL),
-            "brier_52": None if not r52 else round(_brier(r52), 4),
-            "hit_52": None if not r52 else round(_hit(r52), 1),
-            "n_52": len(r52),
-            "brier_all": None if not r_all else round(_brier(r_all), 4),
-            "hit_all": None if not r_all else round(_hit(r_all), 1),
-            "n_all": len(r_all),
-        }
+    for h in HORIZONS:
+        hk = str(h)
+        done = [w for w in weeks if w["fwd"].get(hk) is not None and w["fc"][hk]["preds"]]
+        res = {}
+        for m in list(MODELS) + ["selected"]:
+            def rows(ws):
+                r = []
+                for w in ws:
+                    fc = w["fc"][hk]
+                    p = fc["p"] if m == "selected" else fc["preds"].get(m)
+                    b = fc["preds"].get("base")
+                    if p is not None and b is not None:
+                        r.append((p, b, 1 if w["fwd"][hk] > 0 else 0))
+                return r
+            def summ(r):
+                if not r:
+                    return None, None, None
+                bm = _brier([(p, o) for p, _, o in r])
+                bb = _brier([(b, o) for _, b, o in r])
+                return round(bm, 4), round(_hit([(p, o) for p, _, o in r]), 1), (round(100 * (1 - bm / bb), 1) if bb else None)
+            r_all, r52 = rows(done), rows(done[-52:])
+            b52, h52, s52 = summ(r52)
+            ba, ha, sa = summ(r_all)
+            res[m] = {"label": MODELS.get(m, AVG_LABEL), "brier_52": b52, "hit_52": h52, "bss_52": s52, "n_52": len(r52),
+                      "brier_all": ba, "hit_all": ha, "bss_all": sa, "n_all": len(r_all)}
+        out[hk] = res
     return out
 
 
@@ -578,6 +683,8 @@ def main():
 
     btc_src, btc = btc_daily()
     raw["btc"] = btc
+    raw["stable"] = stablecoin_supply()
+    raw["dxy"] = dollar_index()
     keys = {k: sorted(v) for k, v in raw.items()}
 
     # 주간 기준일 = 수요일 (H.4.1). TGA가 있는 마지막 날까지.
@@ -601,6 +708,9 @@ def main():
             "sofr_max": window_max(raw["sofr"], keys["sofr"], start, d),
             "iorb": asof(raw["iorb"], keys["iorb"], d),
             "btc": asof(raw["btc"], keys["btc"], d),
+            "stable": asof(raw["stable"], keys["stable"], d),
+            "dxy": asof(raw["dxy"], keys["dxy"], d),
+            "vol": realized_vol(raw["btc"], keys["btc"], d),
         }
         weeks.append(w)
 
@@ -640,7 +750,8 @@ def main():
         w["scenario"] = classify(w)
 
     predict_walk_forward(weeks)
-    model_scores = score_models(weeks)
+    scores_h = score_models(weeks)
+    model_scores = scores_h["1"]
 
     for w in weeks:
         for k in list(w):
@@ -677,6 +788,8 @@ def main():
         "weeks": weeks,
         "models": MODELS,
         "model_scores": model_scores,
+        "model_scores_h": scores_h,
+        "horizons": {str(k): v for k, v in HORIZONS.items()},
         "rrp_daily": rrp_daily,
         "btc_daily": btc_daily_recent,
         **extras,
@@ -692,6 +805,7 @@ def main():
         log.append({
             "week": last["date"], "scenario": last["scenario"], "p_up": last["p_up"],
             "model": last["p_model"], "n": last["p_n"], "preds": last["preds"], "btc_at": last["btc"],
+            "p4": last["fc"]["4"]["p"], "p12": last["fc"]["12"]["p"],
             "logged_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         })
         with open(PRED_LOG, "w", encoding="utf-8") as f:
