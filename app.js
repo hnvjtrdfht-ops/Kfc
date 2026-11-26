@@ -288,9 +288,9 @@
     const cur = W[W.length - 1];
     const all = nextWeek(W, () => true);
     let up = cur.p_up, label, n = cur.p_n, avg = null;
-    const M = data.models || {};
+    const M = { avg: "다섯 방식 평균", ...(data.models || {}) };
     if (up != null) {
-      label = `${M[cur.p_model] || cur.p_model} 방식 · 비슷한 과거 ${n}주`;
+      label = cur.p_model === "avg" ? `다섯 방식 평균 · 과거 ${n}주` : `${M[cur.p_model] || cur.p_model} 방식 · 비슷한 과거 ${n}주`;
     } else {
       const s = nextWeek(W, (w) => w.scenario === cur.scenario) || all;
       if (!s) return;
@@ -307,7 +307,7 @@
 
   function renderVerify(W, data) {
     const S = data.model_scores || {};
-    const M = data.models || {};
+    const M = { avg: "다섯 방식 평균", ...(data.models || {}) };
     const cur = W[W.length - 1];
     const box = $("#verifyBox");
     if (!S.selected) { box.innerHTML = `<div class="muted">검증 데이터가 아직 없습니다.</div>`; return; }
@@ -316,7 +316,7 @@
     const order = ["selected", ...Object.keys(M)];
     const rows = order.filter((k) => S[k]).map((k) => {
       const v = S[k];
-      const now = k === "selected" ? "" : k === cur.p_model ? " ← 이번 주 사용" : "";
+      const now = k === "selected" ? " ← 상단 확률" : "";
       return `<tr${k === "selected" ? ' style="background:var(--surface-2)"' : ""}><td class="l">${esc(v.label)}<span class="muted">${now}</span></td><td class="num">${b(v.brier_52)}</td><td class="num">${v.hit_52 == null ? "—" : v.hit_52 + "%"}</td><td class="num">${b(v.brier_all)}</td><td class="num">${v.hit_all == null ? "—" : v.hit_all + "%"}</td><td class="l">${tag(v.brier_52)}</td></tr>`;
     }).join("");
 
@@ -349,7 +349,7 @@
         <div class="card tscroll">
           <div class="kpi"><div class="lab">방식별 성적 (Brier 점수: 낮을수록 좋음, 동전 던지기 = 0.250)</div></div>
           <table style="margin-top:8px"><thead><tr><th class="l">방식</th><th>1년 Brier</th><th>1년 적중</th><th>전체 Brier</th><th>전체 적중</th><th class="l"></th></tr></thead><tbody>${rows}</tbody></table>
-          <p class="muted" style="margin:10px 0 0">모든 확률은 그 주에 결과가 나와 있던 과거만으로 계산했습니다. 자동 선택은 매주 직전 1년 Brier가 가장 낮았던 방식을 씁니다.</p>
+          <p class="muted" style="margin:10px 0 0">모든 확률은 그 주에 결과가 나와 있던 과거만으로 계산했습니다. 상단 확률은 아래 다섯 방식의 평균입니다(11/26부터, 그 전 실시간 기록은 1년 성적 1위 방식).</p>
         </div>
         <div class="grid">
           <div class="card tscroll"><div class="kpi"><div class="lab">최근 2주 채점</div></div>

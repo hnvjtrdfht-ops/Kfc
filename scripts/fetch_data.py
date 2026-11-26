@@ -468,8 +468,7 @@ MODELS = {
     "scen_liq": "판정 × 순유동성",
 }
 SHRINK = 10      # 조건부 표본을 전체 평균 쪽으로 당기는 강도 (가짜 표본 수)
-SELECT_WIN = 52  # 최근 몇 주 성적으로 모델을 고를지
-SELECT_MIN = 26  # 이만큼 채점된 뒤부터 모델 선택
+AVG_LABEL = "다섯 방식 평균"  # 상단에 쓰는 확률 (2026-11-26부터. 그 전 실시간 기록은 1년 성적 1위 방식)
 
 
 def _features(weeks, i):
@@ -495,7 +494,7 @@ def _hit(rows):
 
 def predict_walk_forward(weeks):
     """각 주에 대해, 그 주까지 결과가 확정된 과거만으로 다음 7일 BTC 상승 확률을 모델별로 계산.
-    맨 위에 쓸 확률은 '직전까지 채점된' 최근 성적(Brier)이 가장 좋은 모델로 고른다."""
+    맨 위에 쓸 확률은 그 주에 계산된 방식들의 단순 평균 (매주 1위로 갈아타는 것보다 덜 흔들림)."""
     feats = [_features(weeks, i) for i in range(len(weeks))]
     for i, w in enumerate(weeks):
         hist = [j for j in range(1, i) if weeks[j + 1]["btc_ret"] is not None]
@@ -514,25 +513,13 @@ def predict_walk_forward(weeks):
                 w["pred_n"][m] = len(match)
         w["next_ret"] = weeks[i + 1]["btc_ret"] if i + 1 < len(weeks) else None
 
-    for i, w in enumerate(weeks):
-        scored = [k for k in range(i) if weeks[k]["next_ret"] is not None and k + 1 <= i and weeks[k]["preds"]][-SELECT_WIN:]
-        chosen = "scenario"
-        if len(scored) >= SELECT_MIN:
-            best = None
-            for m in MODELS:
-                rows = [(weeks[k]["preds"][m], 1 if weeks[k]["next_ret"] > 0 else 0) for k in scored if m in weeks[k]["preds"]]
-                if len(rows) < SELECT_MIN:
-                    continue
-                b = _brier(rows)
-                if best is None or b < best[0]:
-                    best = (b, m)
-            if best:
-                chosen = best[1]
-        if chosen not in w["preds"]:
-            chosen = "base" if "base" in w["preds"] else None
-        w["p_model"] = chosen
-        w["p_up"] = w["preds"].get(chosen) if chosen else None
-        w["p_n"] = w["pred_n"].get(chosen) if chosen else None
+    for w in weeks:
+        if w["preds"]:
+            w["p_model"] = "avg"
+            w["p_up"] = round(sum(w["preds"].values()) / len(w["preds"]), 1)
+            w["p_n"] = w["pred_n"].get("base")
+        else:
+            w["p_model"] = w["p_up"] = w["p_n"] = None
 
 
 def score_models(weeks):
@@ -548,7 +535,7 @@ def score_models(weeks):
             return r
         r_all, r52 = rows(done), rows(done[-52:])
         out[m] = {
-            "label": MODELS.get(m, "자동 선택"),
+            "label": MODELS.get(m, AVG_LABEL),
             "brier_52": None if not r52 else round(_brier(r52), 4),
             "hit_52": None if not r52 else round(_hit(r52), 1),
             "n_52": len(r52),
