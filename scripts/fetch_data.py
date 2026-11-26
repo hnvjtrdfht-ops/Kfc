@@ -270,7 +270,8 @@ def stablecoin_supply():
                 if v is None:
                     continue
                 d = datetime.fromtimestamp(int(r["date"]), tz=timezone.utc).date().isoformat()
-                if d >= START.isoformat():
+                # DefiLlama 초기 구간은 집계 누락이 커서(2018년 1월 '0억' 등) 2020년부터만 사용
+                if d >= "2020-01-01":
                     out[d] = float(v) / 1e9
             if len(out) > 300:
                 print(f"스테이블코인: {url} {len(out)}일", file=sys.stderr)
